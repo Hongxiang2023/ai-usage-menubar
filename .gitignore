@@ -1,0 +1,4 @@
+*.app/
+MenuBarUsage
+usage.json
+.DS_Store
