@@ -63,7 +63,10 @@ def claude_official():
     try:
         raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
                              capture_output=True, text=True, timeout=10).stdout
-        tok = json.loads(raw)["claudeAiOauth"]["accessToken"]
+        oauth = json.loads(raw)["claudeAiOauth"]
+        if oauth.get("expiresAt", 0) / 1000 < time.time():
+            return {"error": "token expired, run `claude` once to refresh"}
+        tok = oauth["accessToken"]
         ca = ca_bundle()
         cfg = 'url = "https://api.anthropic.com/api/oauth/usage"\n' \
               'header = "Authorization: Bearer %s"\n' \
@@ -92,7 +95,10 @@ def codex_official():
         rl = j["rate_limit"]
         win = lambda w: w and {"used_percent": w["used_percent"],
                                "window_minutes": w["limit_window_seconds"] / 60,
-                               "resets_at": w["reset_at"]}
+                               "resets_at": w["reset_at"],
+                               # untouched window: the timer starts at first use
+                               "idle": w["reset_after_seconds"] >= w["limit_window_seconds"] - 5
+                                       and w["used_percent"] == 0}
         return {"primary": win(rl.get("primary_window")), "secondary": win(rl.get("secondary_window")),
                 "plan": j.get("plan_type")}
     except Exception:

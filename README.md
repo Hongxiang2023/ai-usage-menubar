@@ -4,7 +4,7 @@ A tiny macOS menu bar app that shows how much of your **Claude** and **Codex** q
 Click it for weekly / 5-hour remaining and reset countdowns.
 
 - Claude: weekly and 5-hour session limits (from your Claude Code login)
-- Codex: weekly limit (from your Codex CLI login)
+- Codex: weekly limit (from your Codex CLI login). A week that hasn't started yet is shown as "window starts at first use"
 - Includes usage from every device (web, phone, other computers), not just this Mac
 - Auto-refresh interval is configurable (1 min / 5 min / 10 min / 30 min / 1 h, default 10 min)
 
@@ -33,6 +33,16 @@ If macOS blocks the first launch, right-click the app → Open.
 
 Click the menu bar item → **Refresh every** → pick a value. It is remembered across restarts.
 **Refresh** (⌘R) updates immediately.
+
+## Keep the Claude token fresh (recommended)
+
+Claude Code's login token expires after a few hours and is only renewed when you use `claude`. If you haven't used it for a while,
+the Claude number falls back to local token counts and the menu says `token expired`. To avoid that, install a background job
+that sends one tiny prompt (cheapest model) every 2 hours so Claude Code renews its own token:
+
+```bash
+./keep-token-fresh.sh --install      # remove with: ./keep-token-fresh.sh --uninstall
+```
 
 ## How it works
 

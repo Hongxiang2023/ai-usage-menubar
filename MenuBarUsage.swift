@@ -62,14 +62,19 @@ final class App: NSObject, NSApplicationDelegate {
             line("  Weekly left: \(Int(max(0, 100 - p)))%, resets in \(fmtLeft(cw["resets_at"] as? Double))")
             if let c5 = c5, let p5 = c5["used_percent"] as? Double { line("  5h session left: \(Int(max(0, 100 - p5)))%, resets in \(fmtLeft(c5["resets_at"] as? Double))") }
         } else {
-            line("  (official usage unavailable, showing local tokens)")
+            line("  (\(off?["error"] as? String ?? "official usage unavailable"); showing local tokens)")
             line("  5h window: \(fmtTok(blk)) tokens, resets in \(fmtLeft(c["block_resets_at"] as? Double))")
         }
         menu.addItem(.separator())
         line("Codex", bold: true)
         if let x = x, let p = pct {
             let mins = x["window_minutes"] as? Double ?? 0
-            line("  \(mins >= 10080 ? "Weekly" : "\(Int(mins/60))h") left: \(Int(max(0, 100 - p)))%, resets in \(fmtLeft(x["resets_at"] as? Double))")
+            let name = mins >= 10080 ? "Weekly" : "\(Int(mins/60))h"
+            if x["idle"] as? Bool == true {
+                line("  \(name) left: \(Int(p))%, window starts at first use")
+            } else {
+                line("  \(name) left: \(Int(p))%, resets in \(fmtLeft(x["resets_at"] as? Double))")
+            }
         } else { line("  no data") }
         menu.addItem(.separator()); finish(menu)
     }
