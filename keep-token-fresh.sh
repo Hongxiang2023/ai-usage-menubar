@@ -5,18 +5,21 @@
 LABEL=com.ai-usage-menubar.keepfresh
 PLIST=~/Library/LaunchAgents/$LABEL.plist
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# launchd cannot read ~/Desktop, ~/Documents, ~/Downloads, so run a copy from ~/.config
+INSTALLED=~/.config/ai-usage-menubar/keep-token-fresh.sh
 
 if [ "$1" = "--install" ]; then
   CLAUDE="$(command -v claude)" || { echo "claude not found in PATH"; exit 1; }
   CA="${USAGE_CA_CERT:-${NODE_EXTRA_CA_CERTS:-}}"
   [ -z "$CA" ] && [ -f ~/.config/ai-usage-menubar/ca_cert_path ] && CA="$(cat ~/.config/ai-usage-menubar/ca_cert_path)"
   [ -z "$CA" ] && [ -f "/Library/Application Support/Netskope/STAgent/data/nscacert.pem" ] && CA="/Library/Application Support/Netskope/STAgent/data/nscacert.pem"
+  mkdir -p ~/.config/ai-usage-menubar && cp "$DIR/keep-token-fresh.sh" "$INSTALLED" && chmod +x "$INSTALLED"
   cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>$LABEL</string>
-<key>ProgramArguments</key><array><string>/bin/bash</string><string>$DIR/keep-token-fresh.sh</string></array>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>$INSTALLED</string></array>
 <key>StartInterval</key><integer>7200</integer>
 <key>RunAtLoad</key><true/>
 <key>EnvironmentVariables</key><dict>
@@ -29,7 +32,7 @@ PL
   exit 0
 fi
 if [ "$1" = "--uninstall" ]; then
-  launchctl unload "$PLIST" 2>/dev/null; rm -f "$PLIST"; echo "Removed."; exit 0
+  launchctl unload "$PLIST" 2>/dev/null; rm -f "$PLIST" "$INSTALLED"; echo "Removed."; exit 0
 fi
 
 [ -z "$NODE_EXTRA_CA_CERTS" ] && unset NODE_EXTRA_CA_CERTS
