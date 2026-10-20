@@ -23,6 +23,9 @@ if [ "$1" = "--install" ]; then
 <key>StartInterval</key><integer>7200</integer>
 <key>RunAtLoad</key><true/>
 <key>EnvironmentVariables</key><dict>
+<key>HOME</key><string>$HOME</string>
+<key>USER</key><string>$USER</string>
+<key>LOGNAME</key><string>$USER</string>
 <key>PATH</key><string>$(dirname "$CLAUDE"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
 <key>NODE_EXTRA_CA_CERTS</key><string>$CA</string>
 </dict>
@@ -36,4 +39,6 @@ if [ "$1" = "--uninstall" ]; then
 fi
 
 [ -z "$NODE_EXTRA_CA_CERTS" ] && unset NODE_EXTRA_CA_CERTS
-claude -p "ok" --model haiku >/dev/null 2>&1
+LOG=~/.config/ai-usage-menubar/keepfresh.log
+{ echo "== $(date) =="; claude -p "ok" --model haiku 2>&1 | head -c 300; echo "rc=${PIPESTATUS[0]}"; } >> "$LOG" 2>&1
+tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"

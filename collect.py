@@ -58,6 +58,31 @@ def ca_bundle():
     cands.append("/Library/Application Support/Netskope/STAgent/data/nscacert.pem")
     return next((c for c in cands if c and os.path.exists(c)), None)
 
+def refresh_claude_token():
+    """Let Claude Code renew its own token by sending one tiny prompt. At most once per 20 minutes."""
+    import subprocess, shutil
+    stamp = f"{HOME}/.config/ai-usage-menubar/last_refresh_attempt"
+    try:
+        if time.time() - os.path.getmtime(stamp) < 1200:
+            return False
+    except OSError:
+        pass
+    exe = shutil.which("claude", path=os.pathsep.join(
+        [f"{HOME}/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", os.environ.get("PATH", "")]))
+    if not exe:
+        return False
+    os.makedirs(os.path.dirname(stamp), exist_ok=True)
+    open(stamp, "w").close()
+    env = dict(os.environ)
+    ca = ca_bundle()
+    if ca: env["NODE_EXTRA_CA_CERTS"] = ca
+    try:
+        subprocess.run([exe, "-p", "ok", "--model", "haiku"], cwd=HOME, env=env,
+                       capture_output=True, timeout=90)
+        return True
+    except Exception:
+        return False
+
 def claude_official():
     import subprocess
     try:
@@ -65,7 +90,13 @@ def claude_official():
                              capture_output=True, text=True, timeout=10).stdout
         oauth = json.loads(raw)["claudeAiOauth"]
         if oauth.get("expiresAt", 0) / 1000 < time.time():
-            return {"error": "token expired, run `claude` once to refresh"}
+            if not refresh_claude_token():
+                return {"error": "token expired, run `claude` once to refresh"}
+            raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            oauth = json.loads(raw)["claudeAiOauth"]
+            if oauth.get("expiresAt", 0) / 1000 < time.time():
+                return {"error": "token expired, run `claude` once to refresh"}
         tok = oauth["accessToken"]
         ca = ca_bundle()
         cfg = 'url = "https://api.anthropic.com/api/oauth/usage"\n' \
