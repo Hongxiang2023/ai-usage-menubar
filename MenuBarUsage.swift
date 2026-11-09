@@ -60,6 +60,9 @@ final class App: NSObject, NSApplicationDelegate {
         line("Claude Code", bold: true)
         if let cw = cw, let p = cw["used_percent"] as? Double {
             line("  Weekly left: \(Int(max(0, 100 - p)))%, resets in \(fmtLeft(cw["resets_at"] as? Double))")
+            if let le = off?["login_expires_at"] as? Double, le - Date().timeIntervalSince1970 < 3 * 86400 {
+                line("  ⚠️ Claude login expires in \(fmtLeft(le)): run `claude` then /login")
+            }
             if let c5 = c5, let p5 = c5["used_percent"] as? Double { line("  5h session left: \(Int(max(0, 100 - p5)))%, resets in \(fmtLeft(c5["resets_at"] as? Double))") }
         } else {
             line("  (\(off?["error"] as? String ?? "official usage unavailable"); showing local tokens)")

@@ -89,6 +89,9 @@ def claude_official():
         raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
                              capture_output=True, text=True, timeout=10).stdout
         oauth = json.loads(raw)["claudeAiOauth"]
+        rexp = oauth.get("refreshTokenExpiresAt")
+        if rexp and rexp / 1000 < time.time():
+            return {"error": "Claude login expired, run `claude` then /login"}
         if oauth.get("expiresAt", 0) / 1000 < time.time():
             if not refresh_claude_token():
                 return {"error": "token expired, run `claude` once to refresh"}
@@ -107,7 +110,8 @@ def claude_official():
         if ca: cmd += ["--cacert", ca]
         j = json.loads(subprocess.run(cmd, input=cfg, capture_output=True, text=True, timeout=20).stdout)
         t = lambda w: w and {"used_percent": w["utilization"], "resets_at": parse_ts(w["resets_at"])}
-        return {"five_hour": t(j.get("five_hour")), "seven_day": t(j.get("seven_day"))}
+        return {"five_hour": t(j.get("five_hour")), "seven_day": t(j.get("seven_day")),
+                "login_expires_at": rexp / 1000 if rexp else None}
     except Exception:
         return None
 
