@@ -50,7 +50,9 @@ that sends one tiny prompt (cheapest model) every 2 hours so Claude Code renews 
 (`~/.codex/auth.json`) already store on your Mac, queries each service's usage endpoint over HTTPS, and prints JSON.
 The Swift app just runs it on a timer and renders the result.
 
-If a query fails (offline, token expired), it falls back to local data:
+If the Claude query fails (offline, token expired), the app keeps showing the last known official value marked with `~`
+(e.g. `Claude ~73%`), retries within a minute, and refreshes right after the Mac wakes from sleep.
+With no earlier value to show, it falls back to local data:
 Claude shows token counts from `~/.claude/projects`, Codex shows the last value from `~/.codex/sessions`.
 
 ## Privacy and caveats

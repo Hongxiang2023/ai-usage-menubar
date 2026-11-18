@@ -59,11 +59,11 @@ def ca_bundle():
     return next((c for c in cands if c and os.path.exists(c)), None)
 
 def refresh_claude_token():
-    """Let Claude Code renew its own token by sending one tiny prompt. At most once per 20 minutes."""
+    """Let Claude Code renew its own token by sending one tiny prompt. At most once per 4 minutes."""
     import subprocess, shutil
     stamp = f"{HOME}/.config/ai-usage-menubar/last_refresh_attempt"
     try:
-        if time.time() - os.path.getmtime(stamp) < 1200:
+        if time.time() - os.path.getmtime(stamp) < 240:
             return False
     except OSError:
         pass
@@ -115,6 +115,29 @@ def claude_official():
     except Exception:
         return None
 
+CACHE = f"{HOME}/.config/ai-usage-menubar/claude_cache.json"
+
+def claude_official_cached():
+    """Live value if possible; otherwise the last good one (windows that have since reset are dropped)."""
+    live = claude_official()
+    if live and live.get("seven_day"):
+        try:
+            os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+            json.dump({"cached_at": time.time(), **live}, open(CACHE, "w"))
+        except OSError:
+            pass
+        return live
+    err = (live or {}).get("error") or "official usage unavailable"
+    try:
+        c = json.load(open(CACHE))
+    except (OSError, ValueError):
+        return {"error": err}
+    for k in ("five_hour", "seven_day"):
+        if c.get(k) and c[k]["resets_at"] < time.time():
+            c[k] = None
+    c["error"] = err
+    return c
+
 def codex_official():
     import subprocess
     try:
@@ -160,5 +183,5 @@ def codex():
                     "plan": rl.get("plan_type")}
     return None
 
-data = {"updated_at": int(time.time()), "claude": {**claude(), "official": claude_official()}, "codex": codex_official() or codex()}
+data = {"updated_at": int(time.time()), "claude": {**claude(), "official": claude_official_cached()}, "codex": codex_official() or codex()}
 print(json.dumps(data))

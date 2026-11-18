@@ -18,7 +18,13 @@ final class App: NSObject, NSApplicationDelegate {
         item.button?.title = "Claude … Codex …"
         refresh()
         schedule()
+        // the token usually expires while the Mac sleeps: refresh shortly after wake, once the network is back
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            self.retries = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.refresh() }
+        }
     }
+    var retries = 0
     var minutes: Int {
         let m = UserDefaults.standard.integer(forKey: "refreshMinutes"); return m > 0 ? m : 10
     }
@@ -49,9 +55,16 @@ final class App: NSObject, NSApplicationDelegate {
         let off = c["official"] as? [String: Any]
         let cw = off?["seven_day"] as? [String: Any]
         let c5 = off?["five_hour"] as? [String: Any]
+        // failed or served from cache: retry soon instead of waiting a full interval
+        let failed = off == nil || off?["error"] != nil
+        if !failed { retries = 0 } else if retries < 6 {
+            retries += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(min(retries, 5)) * 60) { self.refresh() }
+        }
+        let stale = (cw != nil && failed) ? "~" : ""
         let pct = (x?["used_percent"] as? Double).map { max(0, 100 - $0) }
         let cpct = (cw?["used_percent"] as? Double).map { max(0, 100 - $0) }
-        item.button?.title = "Claude \(cpct.map { "\(Int($0))%" } ?? fmtTok(blk)) · Codex \(pct.map { "\(Int($0))%" } ?? "—")"
+        item.button?.title = "Claude \(cpct.map { "\(stale)\(Int($0))%" } ?? fmtTok(blk)) · Codex \(pct.map { "\(Int($0))%" } ?? "—")"
         func line(_ s: String, bold: Bool = false) {
             let m = NSMenuItem(title: s, action: nil, keyEquivalent: "")
             if bold { m.attributedTitle = NSAttributedString(string: s, attributes: [.font: NSFont.boldSystemFont(ofSize: 13)]) }
@@ -60,6 +73,10 @@ final class App: NSObject, NSApplicationDelegate {
         line("Claude Code", bold: true)
         if let cw = cw, let p = cw["used_percent"] as? Double {
             line("  Weekly left: \(Int(max(0, 100 - p)))%, resets in \(fmtLeft(cw["resets_at"] as? Double))")
+            if failed, let at = off?["cached_at"] as? Double {
+                let f = DateFormatter(); f.dateFormat = "MMM d HH:mm"
+                line("  (last known value from \(f.string(from: Date(timeIntervalSince1970: at))): \(off?["error"] as? String ?? "offline"))")
+            }
             if let le = off?["login_expires_at"] as? Double, le - Date().timeIntervalSince1970 < 3 * 86400 {
                 line("  ⚠️ Claude login expires in \(fmtLeft(le)): run `claude` then /login")
             }
