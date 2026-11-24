@@ -119,7 +119,9 @@ CACHE = f"{HOME}/.config/ai-usage-menubar/claude_cache.json"
 
 def claude_official_cached():
     """Live value if possible; otherwise the last good one (windows that have since reset are dropped)."""
-    live = claude_official()
+    # USAGE_CLAUDE_WEB: the app reads usage through its own claude.ai sign-in, so skip the CLI token
+    web = os.environ.get("USAGE_CLAUDE_WEB")
+    live = None if web else claude_official()
     if live and live.get("seven_day"):
         try:
             os.makedirs(os.path.dirname(CACHE), exist_ok=True)
@@ -127,7 +129,7 @@ def claude_official_cached():
         except OSError:
             pass
         return live
-    err = (live or {}).get("error") or "official usage unavailable"
+    err = (live or {}).get("error") or ("claude.ai not reachable" if web else "official usage unavailable")
     try:
         c = json.load(open(CACHE))
     except (OSError, ValueError):

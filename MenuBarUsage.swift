@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 
 let dir = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
 let script = ProcessInfo.processInfo.environment["USAGE_COLLECTOR"]
@@ -12,10 +13,129 @@ func fmtLeft(_ ts: Double?) -> String {
     return m >= 1440 ? "\(m/1440)d\(m%1440/60)h" : m >= 60 ? "\(m/60)h\(m%60)m" : "\(m)m"
 }
 
+let safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+let usageJS = """
+const r = await fetch('/api/organizations', {credentials: 'include'});
+if (r.status === 401 || r.status === 403) return {signedOut: true};
+if (!r.ok) return {error: 'claude.ai HTTP ' + r.status};
+const orgs = await r.json();
+const t = w => (w && w.utilization != null) ? {used_percent: w.utilization, resets_at: w.resets_at ? Date.parse(w.resets_at) / 1000 : 0} : null;
+for (const o of orgs) {
+  try {
+    const u = await fetch('/api/organizations/' + o.uuid + '/usage', {credentials: 'include'});
+    if (!u.ok) continue;
+    const j = await u.json();
+    if (j.seven_day || j.five_hour) {
+      const out = {};
+      const a = t(j.five_hour), b = t(j.seven_day);
+      if (a) out.five_hour = a;
+      if (b) out.seven_day = b;
+      return out;
+    }
+  } catch (e) {}
+}
+return {error: 'no usage data on claude.ai'};
+"""
+
+/// Reads Claude usage through the app's own claude.ai sign-in (same data as Settings > Usage).
+/// The sign-in lives in this app's private WebKit store; nothing is read from Claude Code or the browser.
+final class ClaudeWeb: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
+    let hidden = WKWebView(frame: .zero)
+    var pending: (([String: Any]) -> Void)?
+    var gen = 0
+    var loginWindow: NSWindow?, loginView: WKWebView?, poll: Timer?
+    var popups: [WKWebView: NSWindow] = [:]
+    var onSignedIn: (() -> Void)?
+
+    override init() {
+        super.init()
+        hidden.customUserAgent = safariUA
+        hidden.navigationDelegate = self
+    }
+    func run(_ view: WKWebView, _ done: @escaping ([String: Any]) -> Void) {
+        view.callAsyncJavaScript(usageJS, arguments: [:], in: nil, in: .page) { res in
+            switch res {
+            case .success(let v): done(v as? [String: Any] ?? ["error": "claude.ai: unexpected reply"])
+            case .failure(let e): done(["error": "claude.ai: \(e.localizedDescription)"])
+            }
+        }
+    }
+    /// Loads a small claude.ai page in the hidden view, then asks it for the usage numbers.
+    func fetch(_ done: @escaping ([String: Any]) -> Void) {
+        gen += 1; let g = gen
+        pending = done
+        hidden.load(URLRequest(url: URL(string: "https://claude.ai/api/organizations")!, timeoutInterval: 20))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { if self.gen == g { self.finish(["error": "claude.ai timed out"]) } }
+    }
+    func finish(_ r: [String: Any]) { let p = pending; pending = nil; p?(r) }
+    func webView(_ v: WKWebView, didFinish n: WKNavigation!) {
+        guard v === hidden, pending != nil else { return }
+        run(hidden) { self.finish($0) }
+    }
+    func webView(_ v: WKWebView, didFail n: WKNavigation!, withError e: Error) {
+        if v === hidden { finish(["error": "claude.ai: \(e.localizedDescription)"]) }
+    }
+    func webView(_ v: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) {
+        if v === hidden { finish(["error": "claude.ai: \(e.localizedDescription)"]) }
+    }
+
+    func showLogin() {
+        if let w = loginWindow { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); return }
+        let v = WKWebView(frame: NSRect(x: 0, y: 0, width: 520, height: 760))
+        v.customUserAgent = safariUA; v.uiDelegate = self
+        let w = NSWindow(contentRect: v.frame, styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        w.title = "Sign in to claude.ai"; w.contentView = v; w.isReleasedWhenClosed = false; w.delegate = self; w.center()
+        loginWindow = w; loginView = v
+        v.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
+        NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil)
+        // close the window by itself once the session works
+        poll = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
+            guard let v = self.loginView, v.url?.host == "claude.ai" else { return }
+            self.run(v) { r in
+                if r["signedOut"] == nil && r["error"] == nil { self.loginWindow?.close() }
+            }
+        }
+    }
+    func windowWillClose(_ n: Notification) {
+        guard (n.object as? NSWindow) === loginWindow else { return }
+        poll?.invalidate(); poll = nil; loginWindow = nil; loginView = nil
+        for (_, w) in popups { w.close() }; popups = [:]
+        onSignedIn?()
+    }
+    // sign-in providers open a pop-up window
+    func webView(_ v: WKWebView, createWebViewWith c: WKWebViewConfiguration, for a: WKNavigationAction, windowFeatures f: WKWindowFeatures) -> WKWebView? {
+        let p = WKWebView(frame: NSRect(x: 0, y: 0, width: 500, height: 680), configuration: c)
+        p.customUserAgent = safariUA; p.uiDelegate = self
+        let w = NSWindow(contentRect: p.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.title = "Sign in"; w.contentView = p; w.isReleasedWhenClosed = false; w.center()
+        popups[p] = w; w.makeKeyAndOrderFront(nil)
+        return p
+    }
+    func webViewDidClose(_ v: WKWebView) { popups[v]?.close(); popups[v] = nil }
+    func signOut(_ done: @escaping () -> Void) {
+        WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast, completionHandler: done)
+    }
+}
+
 final class App: NSObject, NSApplicationDelegate {
+    let claudeWeb = ClaudeWeb()
+    var web: [String: Any] = [:]
+    var webSignedIn: Bool {
+        get { UserDefaults.standard.bool(forKey: "webSignedIn") }
+        set { UserDefaults.standard.set(newValue, forKey: "webSignedIn") }
+    }
+    @objc func signIn() { claudeWeb.showLogin() }
+    @objc func signOut() { claudeWeb.signOut { self.webSignedIn = false; self.refresh() } }
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     func applicationDidFinishLaunching(_ n: Notification) {
         item.button?.title = "Claude … Codex …"
+        let main = NSMenu(), editItem = NSMenuItem(), edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
+        claudeWeb.onSignedIn = { self.refresh() }
         refresh()
         schedule()
         // the token usually expires while the Mac sleeps: refresh shortly after wake, once the network is back
@@ -36,14 +156,34 @@ final class App: NSObject, NSApplicationDelegate {
     @objc func setInterval(_ s: NSMenuItem) {
         UserDefaults.standard.set(s.tag, forKey: "refreshMinutes"); schedule(); refresh()
     }
+    var refreshing = false
     @objc func refresh() {
+        if refreshing { return }
+        refreshing = true
+        claudeWeb.fetch { r in
+            self.web = r
+            if r["seven_day"] != nil || r["five_hour"] != nil {
+                self.webSignedIn = true
+                var c = r; c["cached_at"] = Date().timeIntervalSince1970
+                let dir = NSHomeDirectory() + "/.config/ai-usage-menubar"
+                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                if let d = try? JSONSerialization.data(withJSONObject: c) { try? d.write(to: URL(fileURLWithPath: dir + "/claude_cache.json")) }
+            } else if r["signedOut"] != nil { self.webSignedIn = false }
+            self.collect()
+        }
+    }
+    func collect() {
+        let useWeb = webSignedIn
         DispatchQueue.global().async {
             let p = Process(); let out = Pipe()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            var env = ProcessInfo.processInfo.environment
+            if useWeb { env["USAGE_CLAUDE_WEB"] = "1" }
+            p.environment = env
             p.arguments = [script]; p.standardOutput = out
             try? p.run(); let data = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
             let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            DispatchQueue.main.async { self.render(j) }
+            DispatchQueue.main.async { self.refreshing = false; self.render(j) }
         }
     }
     func render(_ j: [String: Any]?) {
@@ -52,7 +192,9 @@ final class App: NSObject, NSApplicationDelegate {
         let c = j["claude"] as? [String: Any] ?? [:]
         let x = (j["codex"] as? [String: Any])?["primary"] as? [String: Any]
         let blk = c["block_tokens"] as? Double ?? 0
-        let off = c["official"] as? [String: Any]
+        var off = c["official"] as? [String: Any]
+        let viaWeb = web["seven_day"] != nil || web["five_hour"] != nil
+        if viaWeb { off = web }
         let cw = off?["seven_day"] as? [String: Any]
         let c5 = off?["five_hour"] as? [String: Any]
         // failed or served from cache: retry soon instead of waiting a full interval
@@ -84,6 +226,11 @@ final class App: NSObject, NSApplicationDelegate {
         } else {
             line("  (\(off?["error"] as? String ?? "official usage unavailable"); showing local tokens)")
             line("  5h window: \(fmtTok(blk)) tokens, resets in \(fmtLeft(c["block_resets_at"] as? Double))")
+        }
+        let s = NSMenuItem(title: webSignedIn ? "  Signed in to claude.ai ✓  (sign in again…)" : "  Sign in to claude.ai… (recommended)", action: #selector(signIn), keyEquivalent: "")
+        s.target = self; menu.addItem(s)
+        if webSignedIn {
+            let o = NSMenuItem(title: "  Sign out of claude.ai", action: #selector(signOut), keyEquivalent: ""); o.target = self; menu.addItem(o)
         }
         menu.addItem(.separator())
         line("Codex", bold: true)
